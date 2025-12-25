@@ -1,0 +1,190 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Merry Christmas to 7 - Magic Polaroid Tree</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #030303;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    #root {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .aspect-4-3-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      max-width: calc(100vh * 1.3333333333);
+      max-height: calc(100vw * 0.75);
+      background: radial-gradient(circle at center, #111 0%, #000 100%);
+    }
+    .status-badge {
+      background: rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@19.0.0",
+      "react-dom": "https://esm.sh/react-dom@19.0.0",
+      "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+      "three": "https://esm.sh/three@0.170.0",
+      "three/examples/jsm/postprocessing/EffectComposer": "https://esm.sh/three@0.170.0/examples/jsm/postprocessing/EffectComposer",
+      "three/examples/jsm/postprocessing/RenderPass": "https://esm.sh/three@0.170.0/examples/jsm/postprocessing/RenderPass",
+      "three/examples/jsm/postprocessing/UnrealBloomPass": "https://esm.sh/three@0.170.0/examples/jsm/postprocessing/UnrealBloomPass",
+      "three/examples/jsm/environments/RoomEnvironment": "https://esm.sh/three@0.170.0/examples/jsm/environments/RoomEnvironment",
+      "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@0.10.14"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="module">
+    import React, { useEffect, useRef, useState, useCallback } from 'react';
+    import ReactDOM from 'react-dom/client';
+    import * as THREE from 'three';
+    import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer';
+    import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
+    import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
+    import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment';
+    import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+    const CONFIG = {
+      goldCount: 350,
+      silverCount: 350,
+      dustCount: 700,
+      treeHeight: 80,
+      maxRadius: 30,
+      camDistance: 135,
+      bloomStrength: 0.5,
+      bloomThreshold: 0.45,
+      bloomRadius: 0.6
+    };
+
+    enum STATE { TREE = 'tree', SCATTER = 'scatter', ZOOM = 'zoom', ORBIT = 'orbit' }
+
+    // Constants for the Lower Brightness look requested
+    const COLOR_DIM = new THREE.Color(0x222222); 
+    const COLOR_FULL = new THREE.Color(0x777777); 
+
+    const App = () => {
+      const containerRef = useRef(null);
+      const canvasRef = useRef(null);
+      const videoRef = useRef(null);
+      const skeletonCanvasRef = useRef(null);
+      const fileInputRef = useRef(null);
+
+      const sceneRef = useRef(null);
+      const cameraRef = useRef(null);
+      const rendererRef = useRef(null);
+      const composerRef = useRef(null);
+      const mainGroupRef = useRef(new THREE.Group());
+      const photoMeshesRef = useRef([]);
+      
+      const logicDataRef = useRef({ gold: [], silver: [], dust: [], star: null });
+      const meshesRef = useRef({ gold: null, silver: null, dust: null });
+
+      const currentStateRef = useRef(STATE.TREE);
+      const [status, setStatus] = useState("System Initializing...");
+      const [isLoading, setIsLoading] = useState(true);
+      const zoomTargetIndexRef = useRef(0);
+      const [photoCount, setPhotoCount] = useState(0);
+
+      const handPosRef = useRef({ x: 0, y: 0 });
+      const lastHandPosRef = useRef({ x: 0, y: 0 });
+      const isHandPresentRef = useRef(false);
+      const rotationVelocityRef = useRef({ x: 0, y: 0 });
+      const wasPinchRef = useRef(false);
+      const timeRef = useRef(0);
+
+      const handleGesture = useCallback((landmarks) => {
+        const palmX = 1 - (landmarks[0].x + landmarks[9].x) / 2;
+        const palmY = (landmarks[0].y + landmarks[9].y) / 2;
+        handPosRef.current.x = handPosRef.current.x * 0.7 + palmX * 0.3;
+        handPosRef.current.y = handPosRef.current.y * 0.7 + palmY * 0.3;
+
+        const tips = [4, 8, 12, 16, 20];
+        const wrist = landmarks[0];
+        const folded = tips.map((tipIdx, i) => {
+          const d = Math.sqrt(Math.pow(landmarks[tipIdx].x - wrist.x, 2) + Math.pow(landmarks[tipIdx].y - wrist.y, 2));
+          return d < (i === 0 ? 0.3 : 0.25);
+        });
+
+        const dPinch = Math.sqrt(Math.pow(landmarks[4].x - landmarks[8].x, 2) + Math.pow(landmarks[4].y - landmarks[8].y, 2));
+        const isPinch = dPinch < 0.08;
+        const isFist = folded.slice(1).every(f => f);
+        const isPeace = !folded[1] && !folded[2] && folded[3] && folded[4];
+        const isOpen = !isFist && !isPinch && !isPeace;
+
+        if (isPinch) {
+          if (!wasPinchRef.current && photoMeshesRef.current.length > 0) {
+            currentStateRef.current = STATE.ZOOM;
+            zoomTargetIndexRef.current = (zoomTargetIndexRef.current + 1) % photoMeshesRef.current.length;
+            setStatus(`Memory Fragment ${zoomTargetIndexRef.current + 1}`);
+          }
+        } else if (isPeace) {
+          if (photoMeshesRef.current.length > 0) {
+            currentStateRef.current = STATE.ORBIT;
+            setStatus("Orbiting Memories");
+          }
+        } else if (isFist) {
+          currentStateRef.current = STATE.TREE;
+          setStatus("Crystal Tree Formation");
+        } else if (isOpen) {
+          if (currentStateRef.current === STATE.TREE || currentStateRef.current === STATE.ORBIT) {
+            currentStateRef.current = STATE.SCATTER;
+            lastHandPosRef.current.x = handPosRef.current.x;
+          }
+          setStatus("Stellar Nebula");
+        }
+        wasPinchRef.current = isPinch;
+      }, []);
+
+      const addPhotoMesh = useCallback((img) => {
+        const tex = new THREE.Texture(img);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.needsUpdate = true;
+
+        let w = 4, h = 4;
+        const aspect = img.width / img.height;
+        if (aspect > 1) h = 4 / aspect; else w = 4 * aspect;
+
+        // Photo Material - Lower Brightness
+        const mat = new THREE.MeshStandardMaterial({
+          map: tex,
+          side: THREE.DoubleSide,
+          color: 0x777777, // Darker base for low brightness feel
+          roughness: 0.3,
+          metalness: 0.05
+        });
+        const photo = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+
+        // Polaroid Frame Geometry
+        const frameW = w + 0.5;
+        const frameH = h + 1.2;
+        const frameGeo = new THREE.BoxGeometry(frameW, frameH, 0.1);
+        const frameMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.8 });
+        const frame = new THREE.Mesh(frameGeo, frameMat);
+        
+        // Classic Polaroid offset
+        frame.position.z = -0.07;
+        frame.position.y = -0.35; 
+        photo.add(frame);
+
+        const y = (Math.random() - 0.5) * CONFIG.treeHeight;
+        const norm

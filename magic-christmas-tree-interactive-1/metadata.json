@@ -1,0 +1,8 @@
+
+{
+  "name": "Magic Christmas Tree Interactive",
+  "description": "An interactive 3D Christmas tree experience using Three.js and MediaPipe Hand Landmarker. Users can interact with the tree using hand gestures and upload their own photos.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
